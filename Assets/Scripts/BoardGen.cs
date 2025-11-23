@@ -416,31 +416,50 @@ public class BoardGen : MonoBehaviour
     StartCoroutine(Coroutine_Shuffle());
   }
 
-  void OnFinishedShuffling()
-  {
-    activeCoroutines.Clear();
-
-    menu.SetEnableBottomPanel(false);
-    StartCoroutine(Coroutine_CallAfterDelay(() => menu.SetEnableTopPanel(true), 1.0f));
-    GameApp.Instance.TileMovementEnabled = true;
-
-    StartTimer();
-
-    for(int i = 0; i < numTileX; ++i)
+    // Tìm hàm này trong BoardGen.cs và thay thế toàn bộ nội dung của nó
+    void OnFinishedShuffling()
     {
-      for(int j = 0; j < numTileY; ++j)
-      {
-        TileMovement tm = mTileGameObjects[i, j].GetComponent<TileMovement>();
-        tm.onTileInPlace += OnTileInPlace;
-        SpriteRenderer spriteRenderer = tm.gameObject.GetComponent<SpriteRenderer>();
-        Tile.tilesSorting.BringToTop(spriteRenderer);
-      }
+        activeCoroutines.Clear();
+
+        menu.SetEnableBottomPanel(false);
+        StartCoroutine(Coroutine_CallAfterDelay(() => menu.SetEnableTopPanel(true), 1.0f));
+        GameApp.Instance.TileMovementEnabled = true;
+
+        StartTimer();
+
+        for (int i = 0; i < numTileX; ++i)
+        {
+            for (int j = 0; j < numTileY; ++j)
+            {
+                GameObject tileObj = mTileGameObjects[i, j];
+                TileMovement tm = tileObj.GetComponent<TileMovement>();
+                tm.onTileInPlace += OnTileInPlace;
+
+                SpriteRenderer spriteRenderer = tileObj.GetComponent<SpriteRenderer>();
+
+                // [FIX QUAN TRỌNG TẠI ĐÂY] 
+                // KHÔNG GỌI Tile.tilesSorting.BringToTop(spriteRenderer); NỮA!
+
+                // Thay vào đó, hãy đặt lại Order về 0 (để nó nằm trên Background -10)
+                if (spriteRenderer)
+                {
+                    spriteRenderer.sortingOrder = 0;
+                }
+
+                // [FIX THÊM] Đảm bảo chắc chắn vị trí Z = 0 sau khi bay xong
+                Vector3 pos = tileObj.transform.position;
+                pos.z = 0f;
+                tileObj.transform.position = pos;
+            }
+        }
+
+        menu.SetTotalTiles(numTileX * numTileY);
+
+        // Reset lại bộ đếm sorting nếu class TilesSorting của bạn có biến đếm
+        // Tile.tilesSorting.Reset(); (Nếu có hàm này)
     }
 
-    menu.SetTotalTiles(numTileX * numTileY);
-  }
-
-  IEnumerator Coroutine_CallAfterDelay(System.Action function, float delay)
+    IEnumerator Coroutine_CallAfterDelay(System.Action function, float delay)
   {
     yield return new WaitForSeconds(delay);
     function();
