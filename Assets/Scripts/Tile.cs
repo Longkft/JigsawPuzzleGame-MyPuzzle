@@ -1,66 +1,79 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Collections.Generic;
 using System.Threading;
 using UnityEngine;
 
 public class Tile
 {
-  public enum Direction
-  {
-    UP, DOWN, LEFT, RIGHT,
-  }
-  public enum PosNegType
-  {
-    POS,
-    NEG,
-    NONE,
-  }
+    public enum Direction { UP, DOWN, LEFT, RIGHT }
+    public enum PosNegType { POS, NEG, NONE }
 
-  // The offset at which the curve will start.
-  // For an image of size 140 by 140 it will start at 20, 20.
-  //public Vector2Int mOffset = new Vector2Int(20, 20);
-  public static int padding = 20;
+    // [MỚI] Padding không fix cứng là 20 nữa, sẽ tính toán lại khi SetTileSize
+    public static int padding = 20;
+    // [MỚI] tileSize không fix cứng là 100 nữa.
+    public static int tileSize = 100;
 
-  // The size of our jigsaw tile.
-  public static int tileSize = 100;
+    // [MỚI] Hằng số để tham chiếu. Giả sử template khớp nối được vẽ cho size chuẩn là 100.
+    private const int REF_TILE_SIZE = 100;
+    // [MỚI] Tỷ lệ scale hiện tại của khớp nối.
+    private static float currentCurveScale = 1.0f;
 
-  // The line renderers for all directions and types.
-  private Dictionary<(Direction, PosNegType), LineRenderer> mLineRenderers
-    = new Dictionary<(Direction, PosNegType), LineRenderer>();
+    private Dictionary<(Direction, PosNegType), LineRenderer> mLineRenderers = new Dictionary<(Direction, PosNegType), LineRenderer>();
 
-  // Lets store the list of bezier curve points created
-  // from the template bezier curve control points.
-  public static List<Vector2> BezCurve =
-    BezierCurve.PointList2(TemplateBezierCurve.templateControlPoints, 0.001f);
+    // [MỚI] Không khởi tạo ngay. Sẽ khởi tạo lại mỗi khi đổi kích thước.
+    public static List<Vector2> BezCurve = new List<Vector2>();
 
-  // The original texture used to create the jigsaw tile.
-  private Texture2D mOriginalTexture;
+    private Texture2D mOriginalTexture;
+    public Texture2D finalCut { get; private set; }
+    public static readonly Color TransparentColor = new Color(0.0f, 0.0f, 0.0f, 0.0f);
 
-  public Texture2D finalCut { get; private set; }
+    private PosNegType[] mCurveTypes = new PosNegType[4]
+    {
+        PosNegType.NONE, PosNegType.NONE, PosNegType.NONE, PosNegType.NONE,
+    };
 
-  public static readonly Color TransparentColor = new Color(0.0f, 0.0f, 0.0f, 0.0f);
+    private bool[,] mVisited;
+    private Stack<Vector2Int> mStack = new Stack<Vector2Int>();
 
-  private PosNegType[] mCurveTypes = new PosNegType[4]
-  {
-    PosNegType.NONE,
-    PosNegType.NONE,
-    PosNegType.NONE,
-    PosNegType.NONE,
-  };
+    public int xIndex = 0;
+    public int yIndex = 0;
 
-  // A 2d boolean array that stores whether a particular
-  // pixel is visited. We will need this array for the flood fill.
-  private bool[,] mVisited;
+    public static TilesSorting tilesSorting = new TilesSorting();
 
-  // A stack needed for the flood fill of the texture.
-  private Stack<Vector2Int> mStack = new Stack<Vector2Int>();
+    // =================================================================================
+    // [MỚI] HÀM QUAN TRỌNG NHẤT: Gọi hàm này để thiết lập kích thước mới cho Tile
+    // =================================================================================
+    public static void SetNewTileSize(int newSize)
+    {
+        tileSize = newSize;
 
-  public int xIndex = 0;
-  public int yIndex = 0;
+        // Tính toán lại padding theo tỷ lệ (ví dụ 20% của kích thước tile)
+        // Đảm bảo tối thiểu là 2 pixel để tránh lỗi.
+        padding = Mathf.Max(2, Mathf.RoundToInt(newSize * 0.2f));
 
-  // For tiles sorting.
-  public static TilesSorting tilesSorting = new TilesSorting();
-  public void SetCurveType(Direction dir, PosNegType type)
+        // Tính tỷ lệ scale so với kích thước chuẩn 100.
+        // Ví dụ: size mới là 50 -> scale là 0.5. Size mới là 200 -> scale là 2.0.
+        currentCurveScale = (float)newSize / REF_TILE_SIZE;
+
+        // Tạo lại đường cong mẫu với tỷ lệ mới
+        RegenerateBezierTemplate();
+    }
+
+    // [MỚI] Hàm tạo lại mẫu đường cong đã được scale
+    private static void RegenerateBezierTemplate()
+    {
+        BezCurve.Clear();
+        // Lấy điểm gốc từ template (Giả sử template thiết kế cho size 100)
+        List<Vector2> originalPoints = BezierCurve.PointList2(TemplateBezierCurve.templateControlPoints, 0.001f);
+
+        foreach (var p in originalPoints)
+        {
+            // Nhân tọa độ với tỷ lệ scale để phóng to/thu nhỏ khớp nối
+            BezCurve.Add(p * currentCurveScale);
+        }
+    }
+    // =================================================================================
+    public void SetCurveType(Direction dir, PosNegType type)
   {
     mCurveTypes[(int)dir] = type;
   }
@@ -76,7 +89,10 @@ public class Tile
     //int padding = mOffset.x;
     int tileSizeWithPadding = 2 * padding + tileSize;
 
-    finalCut = new Texture2D(tileSizeWithPadding, tileSizeWithPadding, TextureFormat.ARGB32, false);
+        // [FIX] Thêm kiểm tra để đảm bảo texture không quá nhỏ
+        if (tileSizeWithPadding <= 0) tileSizeWithPadding = 1;
+
+        finalCut = new Texture2D(tileSizeWithPadding, tileSizeWithPadding, TextureFormat.ARGB32, false);
 
     // We initialise this newly created texture with transparent color.
     for (int i = 0; i < tileSizeWithPadding; ++i)
@@ -95,117 +111,74 @@ public class Tile
     finalCut.Apply();
   }
 
-  void FloodFillInit()
-  {
-    //int padding = mOffset.x;
-    int tileSizeWithPadding = 2 * padding + tileSize;
-
-    mVisited = new bool[tileSizeWithPadding, tileSizeWithPadding];
-    for (int i = 0; i < tileSizeWithPadding; ++i)
+    void FloodFillInit()
     {
-      for (int j = 0; j < tileSizeWithPadding; ++j)
-      {
-        mVisited[i, j] = false;
-      }
+        int tileSizeWithPadding = 2 * padding + tileSize;
+        mVisited = new bool[tileSizeWithPadding, tileSizeWithPadding];
+
+        // (Giữ nguyên vòng lặp khởi tạo mVisited...)
+        for (int i = 0; i < tileSizeWithPadding; ++i)
+            for (int j = 0; j < tileSizeWithPadding; ++j)
+                mVisited[i, j] = false;
+
+        List<Vector2> pts = new List<Vector2>();
+        for (int i = 0; i < mCurveTypes.Length; ++i)
+        {
+            pts.AddRange(CreateCurve((Direction)i, mCurveTypes[i]));
+        }
+
+        for (int i = 0; i < pts.Count; ++i)
+        {
+            // [FIX CỰC KỲ QUAN TRỌNG]: Kẹp giá trị (Clamp) để tránh lỗi IndexOutOfRange 
+            // khi tính toán số thực (float) chuyển sang số nguyên (int) có thể bị lệch 1 pixel.
+            int px = Mathf.Clamp((int)pts[i].x, 0, tileSizeWithPadding - 1);
+            int py = Mathf.Clamp((int)pts[i].y, 0, tileSizeWithPadding - 1);
+            mVisited[px, py] = true;
+        }
+
+        Vector2Int start = new Vector2Int(tileSizeWithPadding / 2, tileSizeWithPadding / 2);
+        mVisited[start.x, start.y] = true;
+        mStack.Push(start);
     }
 
-    List<Vector2> pts = new List<Vector2>();
-    for (int i = 0; i < mCurveTypes.Length; ++i)
+    void Fill(int x, int y)
     {
-      pts.AddRange(CreateCurve((Direction)i, mCurveTypes[i]));
+        // Cần đảm bảo tọa độ lấy mẫu không vượt quá ảnh gốc
+        int sampleX = Mathf.Clamp(x + xIndex * tileSize, 0, mOriginalTexture.width - 1);
+        int sampleY = Mathf.Clamp(y + yIndex * tileSize, 0, mOriginalTexture.height - 1);
+
+        Color c = mOriginalTexture.GetPixel(sampleX, sampleY);
+        c.a = 1.0f;
+        finalCut.SetPixel(x, y, c);
     }
 
-    // Now we should have a closed curve.
-    for (int i = 0; i < pts.Count; ++i)
+    // [TỐI ƯU] Viết gọn lại hàm FloodFill
+    void FloodFill()
     {
-      mVisited[(int)pts[i].x, (int)pts[i].y] = true;
+        int width_height = padding * 2 + tileSize;
+        while (mStack.Count > 0)
+        {
+            Vector2Int v = mStack.Pop();
+            Fill(v.x, v.y);
+
+            CheckNeighbor(v.x + 1, v.y, width_height); // Phải
+            CheckNeighbor(v.x - 1, v.y, width_height); // Trái
+            CheckNeighbor(v.x, v.y + 1, width_height); // Trên
+            CheckNeighbor(v.x, v.y - 1, width_height); // Dưới
+        }
     }
-    // start from the center.
-    Vector2Int start = new Vector2Int(tileSizeWithPadding / 2, tileSizeWithPadding / 2);
 
-    mVisited[start.x, start.y] = true;
-    mStack.Push(start);
-  }
-
-  void Fill(int x, int y)
-  {
-    Color c = mOriginalTexture.GetPixel(x + xIndex * tileSize, y + yIndex * tileSize);
-    c.a = 1.0f;
-    finalCut.SetPixel(x, y, c);
-  }
-
-  void FloodFill()
-  {
-    //int padding = mOffset.x;
-    int width_height = padding * 2 + tileSize;
-
-    while (mStack.Count > 0)
+    // Hàm phụ trợ cho FloodFill
+    void CheckNeighbor(int x, int y, int limit)
     {
-      Vector2Int v = mStack.Pop();
-
-      int xx = v.x;
-      int yy = v.y;
-
-      Fill(v.x, v.y);
-
-      // Check right.
-      int x = xx + 1;
-      int y = yy;
-
-      if (x < width_height)
-      {
-        Color c = finalCut.GetPixel(x, y);
-        if (!mVisited[x, y])
+        if (x >= 0 && x < limit && y >= 0 && y < limit && !mVisited[x, y])
         {
-          mVisited[x, y] = true;
-          mStack.Push(new Vector2Int(x, y));
+            mVisited[x, y] = true;
+            mStack.Push(new Vector2Int(x, y));
         }
-      }
-
-      // check left.
-      x = xx - 1;
-      y = yy;
-      if (x > 0)
-      {
-        Color c = finalCut.GetPixel(x, y);
-        if (!mVisited[x, y])
-        {
-          mVisited[x, y] = true;
-          mStack.Push(new Vector2Int(x, y));
-        }
-      }
-
-      // Check up.
-      x = xx;
-      y = yy + 1;
-
-      if (y < width_height)
-      {
-        Color c = finalCut.GetPixel(x, y);
-        if (!mVisited[x, y])
-        {
-          mVisited[x, y] = true;
-          mStack.Push(new Vector2Int(x, y));
-        }
-      }
-
-      // Check down.
-      x = xx;
-      y = yy - 1;
-
-      if (y >= 0)
-      {
-        Color c = finalCut.GetPixel(x, y);
-        if (!mVisited[x, y])
-        {
-          mVisited[x, y] = true;
-          mStack.Push(new Vector2Int(x, y));
-        }
-      }
     }
-  }
 
-  public static LineRenderer CreateLineRenderer(UnityEngine.Color color, float lineWidth = 1.0f)
+    public static LineRenderer CreateLineRenderer(UnityEngine.Color color, float lineWidth = 1.0f)
   {
     GameObject obj = new GameObject();
     LineRenderer lr = obj.AddComponent<LineRenderer>();
@@ -242,101 +215,63 @@ public class Tile
     }
   }
 
-  public List<Vector2> CreateCurve(Direction dir, PosNegType type)
-  {
-    int padding_x = padding;// mOffset.x;
-    int padding_y = padding;// mOffset.y;
-    int sw = tileSize;
-    int sh = tileSize;
-
-    List<Vector2> pts = new List<Vector2>(BezCurve);
-    switch (dir)
+    public List<Vector2> CreateCurve(Direction dir, PosNegType type)
     {
-      case Direction.UP:
-        if (type == PosNegType.POS)
-        {
-          TranslatePoints(pts, new Vector2(padding_x, padding_y + sh));
-        }
-        else if (type == PosNegType.NEG)
-        {
-          InvertY(pts);
-          TranslatePoints(pts, new Vector2(padding_x, padding_y + sh));
-        }
-        else
-        {
-          pts.Clear();
-          for (int i = 0; i < 100; ++i)
-          {
-            pts.Add(new Vector2(i + padding_x, padding_y + sh));
-          }
-        }
-        break;
-      case Direction.RIGHT:
-        if (type == PosNegType.POS)
-        {
-          SwapXY(pts);
-          TranslatePoints(pts, new Vector2(padding_x + sw, padding_y));
-        }
-        else if (type == PosNegType.NEG)
-        {
-          InvertY(pts);
-          SwapXY(pts);
-          TranslatePoints(pts, new Vector2(padding_x + sw, padding_y));
-        }
-        else
-        {
-          pts.Clear();
-          for (int i = 0; i < 100; ++i)
-          {
-            pts.Add(new Vector2(padding_x + sw, i + padding_y));
-          }
-        }
-        break;
-      case Direction.DOWN:
-        if (type == PosNegType.POS)
-        {
-          InvertY(pts);
-          TranslatePoints(pts, new Vector2(padding_x, padding_y));
-        }
-        else if (type == PosNegType.NEG)
-        {
-          TranslatePoints(pts, new Vector2(padding_x, padding_y));
-        }
-        else
-        {
-          pts.Clear();
-          for (int i = 0; i < 100; ++i)
-          {
-            pts.Add(new Vector2(i + padding_x, padding_y));
-          }
-        }
-        break;
-      case Direction.LEFT:
-        if (type == PosNegType.POS)
-        {
-          InvertY(pts);
-          SwapXY(pts);
-          TranslatePoints(pts, new Vector2(padding_x, padding_y));
-        }
-        else if (type == PosNegType.NEG)
-        {
-          SwapXY(pts);
-          TranslatePoints(pts, new Vector2(padding_x, padding_y));
-        }
-        else
-        {
-          pts.Clear();
-          for (int i = 0; i < 100; ++i)
-          {
-            pts.Add(new Vector2(padding_x, i + padding_y));
-          }
-        }
-        break;
-    }
-    return pts;
-  }
+        int padding_x = padding;
+        int padding_y = padding;
+        // [MỚI] Sử dụng tileSize động thay vì số cứng
+        int sw = tileSize;
+        int sh = tileSize;
 
-  public void DrawCurve(Direction dir, PosNegType type, UnityEngine.Color color)
+        // Sử dụng BezCurve đã được scale ở hàm SetNewTileSize
+        List<Vector2> pts = new List<Vector2>(BezCurve);
+        switch (dir)
+        {
+            case Direction.UP:
+                if (type == PosNegType.POS) { TranslatePoints(pts, new Vector2(padding_x, padding_y + sh)); }
+                else if (type == PosNegType.NEG) { InvertY(pts); TranslatePoints(pts, new Vector2(padding_x, padding_y + sh)); }
+                else
+                {
+                    pts.Clear();
+                    // [MỚI] Sửa vòng lặp: chạy theo tileSize thay vì 100
+                    for (int i = 0; i < tileSize; ++i) pts.Add(new Vector2(i + padding_x, padding_y + sh));
+                }
+                break;
+            case Direction.RIGHT:
+                if (type == PosNegType.POS) { SwapXY(pts); TranslatePoints(pts, new Vector2(padding_x + sw, padding_y)); }
+                else if (type == PosNegType.NEG) { InvertY(pts); SwapXY(pts); TranslatePoints(pts, new Vector2(padding_x + sw, padding_y)); }
+                else
+                {
+                    pts.Clear();
+                    // [MỚI] Sửa vòng lặp
+                    for (int i = 0; i < tileSize; ++i) pts.Add(new Vector2(padding_x + sw, i + padding_y));
+                }
+                break;
+            case Direction.DOWN:
+                if (type == PosNegType.POS) { InvertY(pts); TranslatePoints(pts, new Vector2(padding_x, padding_y)); }
+                else if (type == PosNegType.NEG) { TranslatePoints(pts, new Vector2(padding_x, padding_y)); }
+                else
+                {
+                    pts.Clear();
+                    // [MỚI] Sửa vòng lặp
+                    for (int i = 0; i < tileSize; ++i) pts.Add(new Vector2(i + padding_x, padding_y));
+                }
+                break;
+            case Direction.LEFT:
+                if (type == PosNegType.POS) { InvertY(pts); SwapXY(pts); TranslatePoints(pts, new Vector2(padding_x, padding_y)); }
+                else if (type == PosNegType.NEG) { SwapXY(pts); TranslatePoints(pts, new Vector2(padding_x, padding_y)); }
+                else
+                {
+                    pts.Clear();
+                    // [MỚI] Sửa vòng lặp
+                    for (int i = 0; i < tileSize; ++i) pts.Add(new Vector2(padding_x, i + padding_y));
+                }
+                break;
+        }
+        return pts;
+    }
+
+    public void DrawCurve(Direction dir, PosNegType type, UnityEngine.Color color)
   {
     if (!mLineRenderers.ContainsKey((dir, type)))
     {

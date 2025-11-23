@@ -1,179 +1,218 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
 public class BoardGen : MonoBehaviour
 {
-  private string imageFilename;
-  Sprite mBaseSpriteOpaque;
-  Sprite mBaseSpriteTransparent;
+    private string imageFilename;
+    Sprite mBaseSpriteOpaque;
+    Sprite mBaseSpriteTransparent;
 
-  GameObject mGameObjectOpaque;
-  GameObject mGameObjectTransparent;
+    GameObject mGameObjectOpaque;
+    GameObject mGameObjectTransparent;
 
-  public float ghostTransparency = 0.1f;
+    public float ghostTransparency = 0.1f;
 
-  // Jigsaw tiles creation.
-  public int numTileX { get; private set; }
-  public int numTileY { get; private set; }
+    // Jigsaw tiles creation.
+    public int numTileX { get; private set; }
+    public int numTileY { get; private set; }
 
-  Tile[,] mTiles = null;
-  GameObject[,] mTileGameObjects= null;
+    Tile[,] mTiles = null;
+    GameObject[,] mTileGameObjects = null;
 
-  public Transform parentForTiles = null;
+    public Transform parentForTiles = null;
 
-  // Access to the menu.
-  public Menu menu = null;
-  private List<Rect> regions = new List<Rect>();
-  private List<Coroutine> activeCoroutines = new List<Coroutine>();
+    // Access to the menu.
+    public Menu menu = null;
+    private List<Rect> regions = new List<Rect>();
+    private List<Coroutine> activeCoroutines = new List<Coroutine>();
 
-  Sprite LoadBaseTexture()
-  {
-    Texture2D tex = SpriteUtils.LoadTexture(imageFilename);
-    if (!tex.isReadable)
+    // [MỚI] BIẾN QUAN TRỌNG: Số lượng cột mảnh ghép bạn muốn chia theo chiều ngang.
+    // Ví dụ: Ảnh gốc chia ra 4x3. Muốn gấp đôi (8x6) thì điền số 8 vào đây trong Inspector.
+    [Header("Jigsaw Settings")]
+    [Tooltip("Số lượng mảnh ghép mong muốn theo chiều ngang.")]
+    public int targetColumns = 4;
+
+    Sprite LoadBaseTexture()
     {
-      Debug.Log("Error: Texture is not readable");
-      return null;
-    }
-
-    if (tex.width % Tile.tileSize != 0 || tex.height % Tile.tileSize != 0)
-    {
-      Debug.Log("Error: Image must be of size that is multiple of <" + Tile.tileSize + ">");
-      return null;
-    }
-
-    // Add padding to the image.
-    Texture2D newTex = new Texture2D(
-        tex.width + Tile.padding * 2,
-        tex.height + Tile.padding * 2,
-        TextureFormat.ARGB32,
-        false);
-
-    // Set the default colour as white
-    for (int x = 0; x < newTex.width; ++x)
-    {
-      for (int y = 0; y < newTex.height; ++y)
-      {
-        newTex.SetPixel(x, y, Color.white);
-      }
-    }
-
-    // Copy the colours.
-    for (int x = 0; x < tex.width; ++x)
-    {
-      for (int y = 0; y < tex.height; ++y)
-      {
-        Color color = tex.GetPixel(x, y);
-        color.a = 1.0f;
-        newTex.SetPixel(x + Tile.padding, y + Tile.padding, color);
-      }
-    }
-    newTex.Apply();
-
-    Sprite sprite = SpriteUtils.CreateSpriteFromTexture2D(
-        newTex,
-        0,
-        0,
-        newTex.width,
-        newTex.height);
-    return sprite;
-  }
-
-  // Start is called before the first frame update
-  void Start()
-  {
-    imageFilename = GameApp.Instance.GetJigsawImageName();
-
-    mBaseSpriteOpaque = LoadBaseTexture();
-    mGameObjectOpaque = new GameObject();
-    mGameObjectOpaque.name = imageFilename + "_Opaque";
-    mGameObjectOpaque.AddComponent<SpriteRenderer>().sprite = mBaseSpriteOpaque;
-    mGameObjectOpaque.GetComponent<SpriteRenderer>().sortingLayerName = "Opaque";
-
-    mBaseSpriteTransparent = CreateTransparentView(mBaseSpriteOpaque.texture);
-    mGameObjectTransparent = new GameObject();
-    mGameObjectTransparent.name = imageFilename + "_Transparent";
-    mGameObjectTransparent.AddComponent<SpriteRenderer>().sprite = mBaseSpriteTransparent;
-    mGameObjectTransparent.GetComponent<SpriteRenderer>().sortingLayerName = "Transparent";
-
-    mGameObjectOpaque.gameObject.SetActive(false);
-
-    SetCameraPosition();
-
-    // Create the Jigsaw tiles.
-    //CreateJigsawTiles();
-    StartCoroutine(Coroutine_CreateJigsawTiles());
-  }
-
-  Sprite CreateTransparentView(Texture2D tex)
-  {
-    Texture2D newTex = new Texture2D(
-      tex.width,
-      tex.height, 
-      TextureFormat.ARGB32, 
-      false);
-
-    for(int x = 0; x < newTex.width; x++)
-    {
-      for(int y = 0; y < newTex.height; y++)
-      {
-        Color c = tex.GetPixel(x, y);
-        if(x > Tile.padding && 
-           x < (newTex.width - Tile.padding) &&
-           y > Tile.padding && 
-           y < (newTex.height - Tile.padding))
+        Texture2D originalTex = SpriteUtils.LoadTexture(imageFilename);
+        if (!originalTex.isReadable)
         {
-          c.a = ghostTransparency;
+            Debug.Log("Error: Texture is not readable");
+            return null;
         }
-        newTex.SetPixel(x, y, c);
-      }
+
+        // 1. TÍNH TOÁN KÍCH THƯỚC CHUẨN
+        int safeTargetColumns = Mathf.Max(1, targetColumns);
+        int newTileSize = originalTex.width / safeTargetColumns;
+
+        // Cập nhật Tile
+        Tile.SetNewTileSize(newTileSize);
+
+        // 2. TÍNH TOÁN KÍCH THƯỚC MỚI ĐÃ CẮT GỌT (TRIM)
+        // Đảm bảo chiều rộng và cao chia hết cho tileSize
+        int trimmedWidth = (originalTex.width / newTileSize) * newTileSize;
+        int trimmedHeight = (originalTex.height / newTileSize) * newTileSize;
+
+        // 3. TẠO TEXTURE ĐÃ CẮT GỌT (Để khớp 100% với lưới Grid)
+        // Lấy phần pixel từ góc dưới trái (0,0) lên
+        Color[] pixels = originalTex.GetPixels(0, 0, trimmedWidth, trimmedHeight);
+
+        Texture2D trimmedTex = new Texture2D(trimmedWidth, trimmedHeight);
+        trimmedTex.SetPixels(pixels);
+        trimmedTex.Apply();
+
+        // Debug xem cắt bớt bao nhiêu
+        Debug.Log($"Gốc: {originalTex.width}x{originalTex.height} -> Cắt còn: {trimmedWidth}x{trimmedHeight} (TileSize: {newTileSize})");
+
+
+        // 4. THÊM PADDING VÀO TEXTURE ĐÃ CẮT (Logic cũ của bạn)
+        Texture2D finalTex = new Texture2D(
+            trimmedWidth + Tile.padding * 2,
+            trimmedHeight + Tile.padding * 2,
+            TextureFormat.ARGB32,
+            false);
+
+        // Fill màu trắng/trong suốt
+        for (int x = 0; x < finalTex.width; ++x)
+            for (int y = 0; y < finalTex.height; ++y)
+                finalTex.SetPixel(x, y, Color.white); // Hoặc Color.clear nếu muốn nền trong suốt
+
+        // Copy pixel từ ảnh đã cắt vào giữa
+        for (int x = 0; x < trimmedWidth; ++x)
+        {
+            for (int y = 0; y < trimmedHeight; ++y)
+            {
+                Color color = trimmedTex.GetPixel(x, y);
+                color.a = 1.0f;
+                finalTex.SetPixel(x + Tile.padding, y + Tile.padding, color);
+            }
+        }
+        finalTex.Apply();
+
+        Sprite sprite = SpriteUtils.CreateSpriteFromTexture2D(
+            finalTex,
+            0,
+            0,
+            finalTex.width,
+            finalTex.height);
+
+        return sprite;
     }
-    newTex.Apply();
 
-    Sprite sprite = SpriteUtils.CreateSpriteFromTexture2D(
-      newTex,
-      0,
-      0,
-      newTex.width,
-      newTex.height);
-    return sprite;
-  }
+    // Start is called before the first frame update
+    // Start is called before the first frame update
+    void Start()
+    {
+        imageFilename = GameApp.Instance.GetJigsawImageName();
 
-  void SetCameraPosition()
-  {
-    Camera.main.transform.position = new Vector3(mBaseSpriteOpaque.texture.width / 2,
-      mBaseSpriteOpaque.texture.height / 2, -10.0f);
-    //Camera.main.orthographicSize = mBaseSpriteOpaque.texture.width / 2;
-    int smaller_value = Mathf.Min(mBaseSpriteOpaque.texture.width, mBaseSpriteOpaque.texture.height);
-    Camera.main.orthographicSize = smaller_value * 0.8f;
-  }
+        // Load texture và tính toán lại kích thước Tile TRƯỚC KHI làm gì khác
+        mBaseSpriteOpaque = LoadBaseTexture();
 
-  public static GameObject CreateGameObjectFromTile(Tile tile)
-  {
-    GameObject obj = new GameObject();
+        mGameObjectOpaque = new GameObject();
+        mGameObjectOpaque.name = imageFilename + "_Opaque";
+        mGameObjectOpaque.AddComponent<SpriteRenderer>().sprite = mBaseSpriteOpaque;
+        mGameObjectOpaque.GetComponent<SpriteRenderer>().sortingLayerName = "Opaque";
 
-    obj.name = "TileGameObe_" + tile.xIndex.ToString() + "_" + tile.yIndex.ToString();
+        // Tạo ảnh mờ đằng sau
+        mBaseSpriteTransparent = CreateTransparentView(mBaseSpriteOpaque.texture);
+        mGameObjectTransparent = new GameObject();
+        mGameObjectTransparent.name = imageFilename + "_Transparent";
+        mGameObjectTransparent.AddComponent<SpriteRenderer>().sprite = mBaseSpriteTransparent;
+        mGameObjectTransparent.GetComponent<SpriteRenderer>().sortingLayerName = "Transparent";
 
-    obj.transform.position = new Vector3(tile.xIndex * Tile.tileSize, tile.yIndex * Tile.tileSize, 0.0f);
+        mGameObjectOpaque.gameObject.SetActive(false);
 
-    SpriteRenderer spriteRenderer = obj.AddComponent<SpriteRenderer>();
-    spriteRenderer.sprite = SpriteUtils.CreateSpriteFromTexture2D(
-      tile.finalCut,
-      0,
-      0,
-      Tile.padding * 2 + Tile.tileSize,
-      Tile.padding * 2 + Tile.tileSize);
+        SetCameraPosition();
 
-    BoxCollider2D box = obj.AddComponent<BoxCollider2D>();
+        // Create the Jigsaw tiles.
+        StartCoroutine(Coroutine_CreateJigsawTiles());
+    }
 
-    TileMovement tileMovement = obj.AddComponent<TileMovement>();
-    tileMovement.tile = tile;
+    Sprite CreateTransparentView(Texture2D tex)
+    {
+        Texture2D newTex = new Texture2D(
+          tex.width,
+          tex.height,
+          TextureFormat.ARGB32,
+          false);
 
-    return obj;
-  }
+        for (int x = 0; x < newTex.width; x++)
+        {
+            for (int y = 0; y < newTex.height; y++)
+            {
+                Color c = tex.GetPixel(x, y);
+                // [LƯU Ý] Sử dụng Tile.padding mới
+                if (x > Tile.padding &&
+                    x < (newTex.width - Tile.padding) &&
+                    y > Tile.padding &&
+                    y < (newTex.height - Tile.padding))
+                {
+                    c.a = ghostTransparency;
+                }
+                newTex.SetPixel(x, y, c);
+            }
+        }
+        newTex.Apply();
 
-  void CreateJigsawTiles()
+        Sprite sprite = SpriteUtils.CreateSpriteFromTexture2D(
+          newTex,
+          0,
+          0,
+          newTex.width,
+          newTex.height);
+        return sprite;
+    }
+
+    void SetCameraPosition()
+    {
+        Camera.main.transform.position = new Vector3(mBaseSpriteOpaque.texture.width / 2,
+          mBaseSpriteOpaque.texture.height / 2, -10.0f);
+        int smaller_value = Mathf.Min(mBaseSpriteOpaque.texture.width, mBaseSpriteOpaque.texture.height);
+        Camera.main.orthographicSize = smaller_value * 0.8f;
+    }
+
+    public static GameObject CreateGameObjectFromTile(Tile tile)
+    {
+        GameObject obj = new GameObject();
+
+        obj.name = "TileGameObe_" + tile.xIndex.ToString() + "_" + tile.yIndex.ToString();
+
+        // [LƯU Ý] Sử dụng Tile.tileSize mới để đặt vị trí
+        obj.transform.position = new Vector3(tile.xIndex * Tile.tileSize, tile.yIndex * Tile.tileSize, 0.0f);
+
+        SpriteRenderer spriteRenderer = obj.AddComponent<SpriteRenderer>();
+
+        // [LƯU Ý] Sử dụng Tile.padding và Tile.tileSize mới để cắt sprite
+        spriteRenderer.sprite = SpriteUtils.CreateSpriteFromTexture2D(
+          tile.finalCut,
+          0,
+          0,
+          Tile.padding * 2 + Tile.tileSize,
+          Tile.padding * 2 + Tile.tileSize);
+
+        BoxCollider2D box = obj.AddComponent<BoxCollider2D>();
+
+        // 1. Kích thước vùng click: Chỉ bằng kích thước tile chính (không tính padding khớp nối)
+        // Để khi các mảnh ghép sát nhau, click không bị dính sang mảnh bên cạnh
+        box.size = new Vector2(Tile.tileSize, Tile.tileSize);
+
+        // 2. Dịch chuyển tâm vùng click:
+        // Vì Sprite có pivot ở (0,0), nên ta phải dịch Collider ra giữa.
+        // Offset = Độ dày viền (Padding) + Nửa kích thước Tile
+        float centerOffset = Tile.padding + (Tile.tileSize / 2.0f);
+
+        box.offset = new Vector2(centerOffset, centerOffset);
+
+
+        TileMovement tileMovement = obj.AddComponent<TileMovement>();
+        tileMovement.tile = tile;
+
+        return obj;
+    }
+
+    void CreateJigsawTiles()
   {
     Texture2D baseTexture = mBaseSpriteOpaque.texture;
     numTileX = baseTexture.width / Tile.tileSize;
@@ -200,38 +239,43 @@ public class BoardGen : MonoBehaviour
     menu.btnPlayOnClick = ShuffleTiles;
   }
 
-  IEnumerator Coroutine_CreateJigsawTiles()
-  {
-    Texture2D baseTexture = mBaseSpriteOpaque.texture;
-    numTileX = baseTexture.width / Tile.tileSize;
-    numTileY = baseTexture.height / Tile.tileSize;
-
-    mTiles = new Tile[numTileX, numTileY];
-    mTileGameObjects = new GameObject[numTileX, numTileY];
-
-    for (int i = 0; i < numTileX; i++)
+    IEnumerator Coroutine_CreateJigsawTiles()
     {
-      for (int j = 0; j < numTileY; j++)
-      {
-        mTiles[i, j] = CreateTile(i, j, baseTexture);
-        mTileGameObjects[i, j] = CreateGameObjectFromTile(mTiles[i, j]);
-        if (parentForTiles != null)
+        // [QUAN TRỌNG] Tính toán lại số lượng tile dựa trên kích thước texture đã padding và tileSize mới
+        Texture2D baseTexture = mBaseSpriteOpaque.texture;
+        // Chiều rộng thực tế của phần ảnh (trừ padding)
+        int contentWidth = baseTexture.width - (Tile.padding * 2);
+        int contentHeight = baseTexture.height - (Tile.padding * 2);
+
+        numTileX = contentWidth / Tile.tileSize;
+        numTileY = contentHeight / Tile.tileSize;
+
+        Debug.Log($"Tạo lưới Jigsaw: {numTileX} x {numTileY} mảnh.");
+
+        mTiles = new Tile[numTileX, numTileY];
+        mTileGameObjects = new GameObject[numTileX, numTileY];
+
+        for (int i = 0; i < numTileX; i++)
         {
-          mTileGameObjects[i, j].transform.SetParent(parentForTiles);
+            for (int j = 0; j < numTileY; j++)
+            {
+                mTiles[i, j] = CreateTile(i, j, baseTexture);
+                mTileGameObjects[i, j] = CreateGameObjectFromTile(mTiles[i, j]);
+                if (parentForTiles != null)
+                {
+                    mTileGameObjects[i, j].transform.SetParent(parentForTiles);
+                }
+
+                yield return null;
+            }
         }
 
-        yield return null;
-      }
+        // Enable the bottom panel and set the delegate to button play on click.
+        menu.SetEnableBottomPanel(true);
+        menu.btnPlayOnClick = ShuffleTiles;
     }
 
-    // Enable the bottom panel and set the delegate to button play on click.
-    menu.SetEnableBottomPanel(true);
-    menu.btnPlayOnClick = ShuffleTiles;
-
-  }
-
-
-  Tile CreateTile(int i, int j, Texture2D baseTexture)
+    Tile CreateTile(int i, int j, Texture2D baseTexture)
   {
     Tile tile = new Tile(baseTexture);
     tile.xIndex = i;
