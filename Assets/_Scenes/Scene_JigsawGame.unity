@@ -850,7 +850,7 @@ MonoBehaviour:
   ghostTransparency: 0.1
   parentForTiles: {fileID: 767284541}
   menu: {fileID: 42172104}
-  targetColumns: 4
+  targetColumns: 8
 --- !u!4 &1126957626
 Transform:
   m_ObjectHideFlags: 0
